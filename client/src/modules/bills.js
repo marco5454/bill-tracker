@@ -141,15 +141,19 @@ async function onCardAction(e) {
         danger: true
       });
       if (!ok) return;
-      await api.deleteBill(id);
+      await api.deleteBill(id, bill.version);
       await refreshBills();
       toastSuccess('Bill deleted');
     } else if (action === 'toggle-paid') {
       const key = cycleKey(bill, todayLocal());
-      await api.toggleBillPayment(id, key);
+      await api.toggleBillPayment(id, key, bill.version);
       await refreshBills();
     }
   } catch (err) {
+    if (err instanceof ApiError && (err.status === 412 || err.status === 428)) {
+      // Stale local state: pull fresh data so the next click works.
+      try { await refreshBills(); } catch {}
+    }
     toastError(err instanceof ApiError ? err.message : 'Action failed');
   }
 }
@@ -250,7 +254,7 @@ function openBillForm(existing) {
     const data = collectBillForm(form);
     try {
       if (isEdit) {
-        await api.updateBill(existing.id, data);
+        await api.updateBill(existing.id, data, existing.version);
         toastSuccess('Bill updated');
       } else {
         await api.createBill(data);
@@ -259,6 +263,9 @@ function openBillForm(existing) {
       await refreshBills();
       closeModal();
     } catch (err) {
+      if (err instanceof ApiError && (err.status === 412 || err.status === 428)) {
+        try { await refreshBills(); } catch {}
+      }
       toastError(err instanceof ApiError ? err.message : 'Save failed');
     }
   });

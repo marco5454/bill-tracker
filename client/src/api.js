@@ -1,14 +1,22 @@
 // Tiny fetch wrapper with consistent error handling.
+//
+// Mutating endpoints accept an optional `version` arg; when provided we send
+// it as the `If-Match` header for optimistic-concurrency control. The server
+// rejects (412) when the row has changed underneath the client and (428) when
+// the header is missing on an endpoint that requires it.
 
-async function request(method, url, body) {
-  const opts = { method, headers: {} };
+async function request(method, url, body, opts = {}) {
+  const reqOpts = { method, headers: {} };
   if (body !== undefined) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
+    reqOpts.headers['Content-Type'] = 'application/json';
+    reqOpts.body = JSON.stringify(body);
+  }
+  if (opts.ifMatch != null) {
+    reqOpts.headers['If-Match'] = `"${opts.ifMatch}"`;
   }
   let res;
   try {
-    res = await fetch(url, opts);
+    res = await fetch(url, reqOpts);
   } catch (err) {
     throw new ApiError(0, 'Network error: ' + (err.message || 'failed to fetch'));
   }
@@ -19,7 +27,13 @@ async function request(method, url, body) {
     try { payload = JSON.parse(text); } catch { payload = text; }
   }
   if (!res.ok) {
-    const msg = (payload && payload.error) || `Request failed (${res.status})`;
+    let msg = (payload && payload.error) || `Request failed (${res.status})`;
+    // Friendlier surface for the two concurrency states.
+    if (res.status === 412) {
+      msg = 'This record was changed in another tab — refresh and try again.';
+    } else if (res.status === 428) {
+      msg = 'Missing version — refresh and try again.';
+    }
     throw new ApiError(res.status, msg, payload && payload.details);
   }
   return payload;
@@ -37,21 +51,27 @@ export const api = {
   // bills
   listBills:    ()        => request('GET',    '/api/bills'),
   createBill:   (data)    => request('POST',   '/api/bills', data),
-  updateBill:   (id, data)=> request('PUT',    `/api/bills/${encodeURIComponent(id)}`, data),
-  deleteBill:   (id)      => request('DELETE', `/api/bills/${encodeURIComponent(id)}`),
-  toggleBillPayment: (id, cycleKey) =>
-    request('POST', `/api/bills/${encodeURIComponent(id)}/payments/${encodeURIComponent(cycleKey)}/toggle`),
+  updateBill:   (id, data, version) =>
+    request('PUT', `/api/bills/${encodeURIComponent(id)}`, data, { ifMatch: version }),
+  deleteBill:   (id, version) =>
+    request('DELETE', `/api/bills/${encodeURIComponent(id)}`, undefined, { ifMatch: version }),
+  toggleBillPayment: (id, cycleKey, version) =>
+    request('POST', `/api/bills/${encodeURIComponent(id)}/payments/${encodeURIComponent(cycleKey)}/toggle`,
+      undefined, { ifMatch: version }),
 
   // credits
   listCredits:    ()         => request('GET',    '/api/credits'),
   createCredit:   (data)     => request('POST',   '/api/credits', data),
-  updateCredit:   (id, data) => request('PUT',    `/api/credits/${encodeURIComponent(id)}`, data),
-  deleteCredit:   (id)       => request('DELETE', `/api/credits/${encodeURIComponent(id)}`),
-  toggleCreditPayment: (id, ym, amount) =>
+  updateCredit:   (id, data, version) =>
+    request('PUT', `/api/credits/${encodeURIComponent(id)}`, data, { ifMatch: version }),
+  deleteCredit:   (id, version) =>
+    request('DELETE', `/api/credits/${encodeURIComponent(id)}`, undefined, { ifMatch: version }),
+  toggleCreditPayment: (id, ym, amount, version) =>
     request('POST', `/api/credits/${encodeURIComponent(id)}/payments/${encodeURIComponent(ym)}/toggle`,
-      amount != null ? { amount } : {}),
-  updateCreditPaymentAmount: (id, ym, amount) =>
-    request('PUT', `/api/credits/${encodeURIComponent(id)}/payments/${encodeURIComponent(ym)}`, { amount }),
+      amount != null ? { amount } : {}, { ifMatch: version }),
+  updateCreditPaymentAmount: (id, ym, amount, version) =>
+    request('PUT', `/api/credits/${encodeURIComponent(id)}/payments/${encodeURIComponent(ym)}`,
+      { amount }, { ifMatch: version }),
 
   // settings
   getSettings:    ()      => request('GET',  '/api/settings'),

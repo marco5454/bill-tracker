@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { db, txn } from '../db.js';
 import { HttpError } from '../middleware/error.js';
 import { v, validate } from '../middleware/validate.js';
+import { requireIfMatch, assertVersionMatch, setVersionHeader } from '../middleware/concurrency.js';
 
 export const billsRouter = Router();
 
@@ -29,6 +30,7 @@ function rowToBill(row, payments) {
     anchorMonth: row.anchor_month,
     notes: row.notes,
     payments: payments || [],
+    version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -59,6 +61,7 @@ billsRouter.get('/', (_req, res) => {
 billsRouter.get('/:id', (req, res) => {
   const bill = loadBill(req.params.id);
   if (!bill) throw new HttpError(404, 'Bill not found');
+  setVersionHeader(res, bill.version);
   res.json(bill);
 });
 
@@ -70,45 +73,66 @@ billsRouter.post('/', (req, res) => {
     INSERT INTO bills (id, name, amount, due_day, recurrence, category, due_month, anchor_month, notes)
     VALUES (@id, @name, @amount, @dueDay, @recurrence, @category, @dueMonth, @anchorMonth, @notes)
   `).run({ id, ...data });
-  res.status(201).json(loadBill(id));
+  const bill = loadBill(id);
+  setVersionHeader(res, bill.version);
+  res.status(201).json(bill);
 });
 
 billsRouter.put('/:id', (req, res) => {
+  const clientVersion = requireIfMatch(req);
   const data = validate(billSchema, req.body);
   enforceRecurrenceRules(data);
-  const info = db.prepare(`
-    UPDATE bills
-       SET name = @name, amount = @amount, due_day = @dueDay, recurrence = @recurrence,
-           category = @category, due_month = @dueMonth, anchor_month = @anchorMonth,
-           notes = @notes, updated_at = datetime('now')
-     WHERE id = @id
-  `).run({ id: req.params.id, ...data });
-  if (info.changes === 0) throw new HttpError(404, 'Bill not found');
-  res.json(loadBill(req.params.id));
+
+  const bill = txn(() => {
+    const row = db.prepare('SELECT version FROM bills WHERE id = ?').get(req.params.id);
+    if (!row) throw new HttpError(404, 'Bill not found');
+    assertVersionMatch(row.version, clientVersion);
+    db.prepare(`
+      UPDATE bills
+         SET name = @name, amount = @amount, due_day = @dueDay, recurrence = @recurrence,
+             category = @category, due_month = @dueMonth, anchor_month = @anchorMonth,
+             notes = @notes, version = version + 1, updated_at = datetime('now')
+       WHERE id = @id
+    `).run({ id: req.params.id, ...data });
+    return loadBill(req.params.id);
+  });
+  setVersionHeader(res, bill.version);
+  res.json(bill);
 });
 
 billsRouter.delete('/:id', (req, res) => {
-  const info = db.prepare('DELETE FROM bills WHERE id = ?').run(req.params.id);
-  if (info.changes === 0) throw new HttpError(404, 'Bill not found');
+  const clientVersion = requireIfMatch(req);
+  txn(() => {
+    const row = db.prepare('SELECT version FROM bills WHERE id = ?').get(req.params.id);
+    if (!row) throw new HttpError(404, 'Bill not found');
+    assertVersionMatch(row.version, clientVersion);
+    db.prepare('DELETE FROM bills WHERE id = ?').run(req.params.id);
+  });
   res.status(204).end();
 });
 
 // Toggle payment for a specific cycle key (e.g. '2026-06', '2026-Q2', '2026').
 billsRouter.post('/:id/payments/:cycleKey/toggle', (req, res) => {
+  const clientVersion = requireIfMatch(req);
   const { id, cycleKey } = req.params;
   if (!/^[0-9A-Za-z-]{1,16}$/.test(cycleKey)) throw new HttpError(400, 'Invalid cycle key');
-  const bill = db.prepare('SELECT id FROM bills WHERE id = ?').get(id);
-  if (!bill) throw new HttpError(404, 'Bill not found');
 
-  txn(() => {
+  const bill = txn(() => {
+    const row = db.prepare('SELECT version FROM bills WHERE id = ?').get(id);
+    if (!row) throw new HttpError(404, 'Bill not found');
+    assertVersionMatch(row.version, clientVersion);
+
     const existing = db.prepare('SELECT 1 FROM bill_payments WHERE bill_id = ? AND cycle_key = ?').get(id, cycleKey);
     if (existing) {
       db.prepare('DELETE FROM bill_payments WHERE bill_id = ? AND cycle_key = ?').run(id, cycleKey);
     } else {
       db.prepare('INSERT INTO bill_payments (bill_id, cycle_key) VALUES (?, ?)').run(id, cycleKey);
     }
+    db.prepare("UPDATE bills SET version = version + 1, updated_at = datetime('now') WHERE id = ?").run(id);
+    return loadBill(id);
   });
-  res.json(loadBill(id));
+  setVersionHeader(res, bill.version);
+  res.json(bill);
 });
 
 function enforceRecurrenceRules(data) {

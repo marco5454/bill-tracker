@@ -167,7 +167,7 @@ async function onCardAction(e) {
         danger: true
       });
       if (!ok) return;
-      await api.deleteCredit(id);
+      await api.deleteCredit(id, credit.version);
       expandedLogs.delete(id);
       await refreshCredits();
       toastSuccess('Credit deleted');
@@ -178,10 +178,13 @@ async function onCardAction(e) {
       renderCredits(view);
     } else if (action === 'toggle-payment') {
       const ym = btn.dataset.ym;
-      await api.toggleCreditPayment(id, ym);
+      await api.toggleCreditPayment(id, ym, null, credit.version);
       await refreshCredits();
     }
   } catch (err) {
+    if (err instanceof ApiError && (err.status === 412 || err.status === 428)) {
+      try { await refreshCredits(); } catch {}
+    }
     toastError(err instanceof ApiError ? err.message : 'Action failed');
   }
 }
@@ -284,7 +287,7 @@ function openCreditForm(existing) {
     const data = collectCreditForm(form);
     try {
       if (isEdit) {
-        await api.updateCredit(existing.id, data);
+        await api.updateCredit(existing.id, data, existing.version);
         toastSuccess('Credit updated');
       } else {
         await api.createCredit(data);
@@ -293,6 +296,9 @@ function openCreditForm(existing) {
       await refreshCredits();
       closeModal();
     } catch (err) {
+      if (err instanceof ApiError && (err.status === 412 || err.status === 428)) {
+        try { await refreshCredits(); } catch {}
+      }
       toastError(err instanceof ApiError ? err.message : 'Save failed');
     }
   });

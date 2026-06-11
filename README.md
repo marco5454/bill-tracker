@@ -14,29 +14,37 @@ A locally-hosted personal finance app for tracking recurring bills and credit/lo
 billtracker/
 ├── server/              # Express API + SQLite layer
 │   ├── index.js         # App entry, middleware, routes wiring
-│   ├── db.js            # SQLite connection + auto-backup
-│   ├── schema.sql       # Tables (bills, credits, payments, settings)
+│   ├── db.js            # SQLite connection + migrations + auto-backup + pingDb
+│   ├── logger.js        # Tiny zero-dep structured logger
+│   ├── migrate.js       # Migration runner (server/migrations/NNN_*.sql)
+│   ├── migrations/      # 001_init.sql, 002_version_columns.sql, ...
 │   ├── middleware/
-│   │   ├── error.js     # Centralized error handler, HttpError class
-│   │   └── validate.js  # Tiny dependency-free request validator
+│   │   ├── error.js         # Centralized error handler, HttpError class
+│   │   ├── validate.js      # Tiny dependency-free request validator
+│   │   ├── request-id.js    # Per-request id + child logger
+│   │   ├── access-log.js    # Structured HTTP access log
+│   │   └── concurrency.js   # If-Match / ETag helpers
 │   └── routes/
-│       ├── bills.js     # CRUD + cycle payment toggle
-│       ├── credits.js   # CRUD + monthly payment toggle (with optional amount)
-│       └── settings.js  # Currency, full export/import, reset
+│       ├── bills.js     # CRUD + cycle payment toggle (optimistic concurrency)
+│       ├── credits.js   # CRUD + monthly payment toggle (optimistic concurrency)
+│       ├── settings.js  # Currency, full export/import, reset
+│       └── health.js    # Liveness + readiness with DB ping
 ├── client/              # Frontend
 │   ├── index.html       # Lean shell
 │   ├── styles/          # main / components / responsive
 │   └── src/
 │       ├── main.js          # Bootstrap + tab routing
-│       ├── api.js           # Fetch wrapper
+│       ├── api.js           # Fetch wrapper (sends If-Match for writes)
 │       ├── state.js         # In-memory cache + pub/sub
-│       ├── format.js        # Money/date helpers, escapeHtml, CSV
+│       ├── format.js        # Money/date helpers, escapeHtml, CSV (with formula-injection guard)
 │       ├── cycle.js         # Bill cycle logic (Monthly/Quarterly/Annually)
 │       ├── credit-math.js   # Simple + monthly add-on interest
 │       ├── modules/         # dashboard / bills / credits / settings
 │       └── ui/              # modal / toast / confirm
+├── tests/               # node --test suites + harness (isolated temp DBs)
 ├── data/                # SQLite database + rotating backups (gitignored)
 ├── vite.config.js
+├── .env.example         # Documented configuration knobs
 └── package.json
 ```
 
@@ -86,13 +94,19 @@ Open <http://localhost:3000>.
 
 ## Security model
 
-- Bound to `127.0.0.1` by default (set `HOST=0.0.0.0` to expose on LAN — only do this on a trusted network).
-- Helmet sets strict security headers including a CSP that disallows inline scripts.
-- All SQL is parameterized (no string concatenation).
-- Every request body is validated against an explicit schema before touching the DB.
-- Centralized error handler never leaks stack traces to clients.
-- Foreign keys enforced; payment rows cascade on bill/credit delete.
-- All rendered HTML in the client is built from `escapeHtml`-wrapped values; no inline `onclick` attributes.
+This app has **no authentication**. The default deployment binds to `127.0.0.1` so only the local user can reach it. The following measures are in place:
+
+- **Loopback by default.** The server *refuses to start* on a non-loopback `HOST` unless you also set `BILLTRACKER_ALLOW_NETWORK=1`, which acknowledges that you are exposing an unauthenticated CRUD API to your network.
+- **Host-header allow-list** mitigates DNS-rebinding attacks against `127.0.0.1`. Configure additional names via `BILLTRACKER_HOST_ALLOWLIST=`.
+- **Helmet** sets strict security headers including a CSP that disallows inline scripts.
+- **Rate limiting**: 300 writes/min/IP globally, plus a stricter 10/5min/IP cap on the destructive `/api/settings/{import,reset,export}` endpoints.
+- **All SQL is parameterized** (no string concatenation). Migrations run inside transactions.
+- **Optimistic concurrency** via `If-Match` / `ETag` on every mutating endpoint prevents stale tabs from silently overwriting each other.
+- **Every request body is validated** against an explicit schema before touching the DB. The `/import` endpoint validates every row up front and aborts before deleting anything if the payload is malformed.
+- **Centralized error handler** never leaks stack traces to clients.
+- **Structured access logs** with per-request IDs (echoed via `X-Request-Id`) for forensics.
+- **Foreign keys enforced**; payment rows cascade on bill/credit delete.
+- **All rendered HTML in the client** is built from `escapeHtml`-wrapped values; no inline `onclick` attributes; CSV exports prefix risky cells (`= + - @`) with a single quote to neutralize spreadsheet formula injection.
 
 ## Features
 
@@ -120,9 +134,25 @@ Open <http://localhost:3000>.
 
 ## Environment variables
 
+See [`.env.example`](./.env.example) for the full list with comments.
+
 - `PORT` — API port (default `3000`)
 - `HOST` — bind address (default `127.0.0.1`)
+- `BILLTRACKER_ALLOW_NETWORK` — must be `1` if `HOST` is non-loopback (no auth!)
+- `BILLTRACKER_HOST_ALLOWLIST` — comma-separated extra Host header values to accept
+- `BILLTRACKER_LOG_LEVEL` — `debug` / `info` / `warn` / `error` / `silent`
+- `BILLTRACKER_DATA_DIR` — override SQLite data directory (used by tests)
+- `SHUTDOWN_TIMEOUT_MS` — graceful-shutdown timeout (default `10000`)
 - `NODE_ENV` — `production` makes the API also serve the built `dist/`
+
+## Tests
+
+```bash
+npm test          # runs the node:test suites under tests/
+npm run audit     # runtime-dep vulnerability scan
+```
+
+Tests boot an isolated Express app with a fresh temp SQLite database per run via the harness in `tests/helpers/route-harness.js`, so they never touch your real `data/` directory.
 
 ## Troubleshooting
 

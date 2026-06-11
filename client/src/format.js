@@ -57,9 +57,15 @@ export function daysBetween(a, b) {
   return Math.round(ms / 86_400_000);
 }
 
-// CSV cell escape — quotes wrap if field contains comma, quote, or newline; internal quotes doubled.
+// CSV cell escape — quotes wrap if field contains comma, quote, or newline;
+// internal quotes doubled. Cells starting with =, +, -, @ are prefixed with a
+// single quote to neutralize spreadsheet formula injection (CWE-1236) when the
+// CSV is opened in Excel/LibreOffice/Google Sheets.
 export function csvCell(value) {
-  const s = value == null ? '' : String(value);
+  let s = value == null ? '' : String(value);
+  if (s.length > 0 && /^[=+\-@\t\r]/.test(s)) {
+    s = "'" + s;
+  }
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }

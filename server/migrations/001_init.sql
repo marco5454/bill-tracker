@@ -1,8 +1,6 @@
--- Bill & Credit Tracker schema
+-- 001_init: Initial schema for Bill & Credit Tracker
 -- All amounts stored as REAL; client formats with currency symbol.
 -- Foreign keys are enforced via PRAGMA in db.js.
-
-PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,

@@ -9,17 +9,81 @@ import { existsSync } from 'node:fs';
 import { billsRouter }    from './routes/bills.js';
 import { creditsRouter }  from './routes/credits.js';
 import { settingsRouter } from './routes/settings.js';
+import { createHealthRouter } from './routes/health.js';
 import { errorHandler, notFound } from './middleware/error.js';
-import { closeDb } from './db.js'; // import side-effect initializes DB
+import { requestId } from './middleware/request-id.js';
+import { accessLog } from './middleware/access-log.js';
+import { logger } from './logger.js';
+import { closeDb, isDbClosed } from './db.js'; // import side-effect initializes DB + runs migrations
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT     = Number(process.env.PORT || 3000);
 const HOST     = process.env.HOST || '127.0.0.1';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
+// --- Trust model -------------------------------------------------------------
+// This app has NO authentication. The default deployment binds to 127.0.0.1 so
+// only the local user can reach it. Operators who flip HOST to a non-loopback
+// address must opt in explicitly via BILLTRACKER_ALLOW_NETWORK=1, which prints
+// a loud warning. This prevents accidentally exposing an unauthenticated CRUD
+// API to the LAN by setting a single env var.
+function isLoopbackHost(h) {
+  if (!h) return true;
+  const lower = h.toLowerCase();
+  return lower === '127.0.0.1' || lower === 'localhost' || lower === '::1' || lower === '::ffff:127.0.0.1';
+}
+
+if (!isLoopbackHost(HOST) && process.env.BILLTRACKER_ALLOW_NETWORK !== '1') {
+  logger.error('refusing to start on a non-loopback HOST without BILLTRACKER_ALLOW_NETWORK=1', {
+    host: HOST,
+    hint: 'This app has no authentication. Set BILLTRACKER_ALLOW_NETWORK=1 only on a trusted, isolated network.',
+  });
+  process.exit(2);
+}
+
+// Allowed Host header values to mitigate DNS rebinding against a localhost
+// service. Comma-separated env override; default covers the typical loopback
+// names plus the configured HOST:PORT.
+const HOST_ALLOWLIST = (() => {
+  const fromEnv = (process.env.BILLTRACKER_HOST_ALLOWLIST || '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const defaults = new Set([
+    `localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`,
+    'localhost', '127.0.0.1', '[::1]',
+  ]);
+  if (!isLoopbackHost(HOST)) {
+    defaults.add(`${HOST}:${PORT}`.toLowerCase());
+    defaults.add(HOST.toLowerCase());
+  }
+  for (const v of fromEnv) defaults.add(v);
+  return defaults;
+})();
+
 const app = express();
 
+// Express strips X-Powered-By header so we don't advertise the stack.
 app.disable('x-powered-by');
+
+// Trust the loopback proxy (Vite dev server) so req.ip reflects the real client
+// when accessed via localhost. Restricted to loopback to avoid IP spoofing.
+app.set('trust proxy', 'loopback');
+
+// Per-request id + structured access log run first so all subsequent
+// middleware (including helmet/cors) can be correlated in logs.
+app.use(requestId);
+app.use(accessLog);
+
+// DNS-rebinding mitigation: reject requests whose Host header isn't in the
+// allowlist. Health/static can still serve when the operator scripts a
+// different name by extending BILLTRACKER_HOST_ALLOWLIST.
+app.use((req, res, next) => {
+  const host = (req.headers.host || '').toLowerCase();
+  if (!host || !HOST_ALLOWLIST.has(host)) {
+    if (req.log) req.log.warn('host.header.rejected', { host });
+    return res.status(421).json({ error: 'Misdirected request: Host header not allowed' });
+  }
+  return next();
+});
 
 // Security headers. CSP allows only same-origin assets + Google Fonts (used by Inter).
 app.use(helmet({
@@ -58,6 +122,21 @@ app.use((req, res, next) => {
   return writeLimiter(req, res, next);
 });
 
+// Stricter limiter on destructive / heavy settings endpoints. Applied to both
+// the GET export (bypasses the write limiter above) and the destructive
+// import/reset POSTs. 10 requests / 5 min / IP is plenty for a human and far
+// too few for a brute-force or scrape.
+const sensitiveSettingsLimiter = rateLimit({
+  windowMs: 5 * 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many sensitive operations, slow down' },
+});
+app.use('/api/settings/export', sensitiveSettingsLimiter);
+app.use('/api/settings/import', sensitiveSettingsLimiter);
+app.use('/api/settings/reset',  sensitiveSettingsLimiter);
+
 // Reject new requests once shutdown begins.
 app.use((_req, res, next) => {
   if (shuttingDown) {
@@ -67,8 +146,8 @@ app.use((_req, res, next) => {
   return next();
 });
 
-// Health
-app.get('/api/health', (_req, res) => res.json({ ok: true, env: NODE_ENV }));
+// Health (liveness + readiness)
+app.use('/api/health', createHealthRouter({ isShuttingDown: () => shuttingDown }));
 
 // API routes
 app.use('/api/bills',    billsRouter);
@@ -87,8 +166,10 @@ app.use('/api', notFound);
 app.use(errorHandler);
 
 const server = app.listen(PORT, HOST, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[billtracker] api listening on http://${HOST}:${PORT}  (${NODE_ENV})`);
+  logger.info('billtracker.api.listening', {
+    host: HOST, port: PORT, env: NODE_ENV,
+    network: !isLoopbackHost(HOST),
+  });
 });
 
 // Tighten socket-level timeouts so a stuck client cannot hold a connection
@@ -109,26 +190,24 @@ const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS || 10_000);
 function shutdown(reason, exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
-  // eslint-disable-next-line no-console
-  console.log(`[billtracker] shutting down (${reason})…`);
+  logger.info('billtracker.shutdown.start', { reason });
 
   let exited = false;
   const finish = (code) => {
     if (exited) return;
     exited = true;
-    try { closeDb(); } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('[billtracker] error closing db:', e);
+    try {
+      if (!isDbClosed()) closeDb();
+    } catch (e) {
+      logger.error('billtracker.shutdown.db_close_failed', { error: e });
     }
-    // eslint-disable-next-line no-console
-    console.log(`[billtracker] shutdown complete (exit ${code}).`);
+    logger.info('billtracker.shutdown.complete', { code });
     process.exit(code);
   };
 
   // Hard timeout: if anything is wedged, force exit.
   const timer = setTimeout(() => {
-    // eslint-disable-next-line no-console
-    console.warn(`[billtracker] shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms; forcing exit.`);
+    logger.warn('billtracker.shutdown.timeout', { timeoutMs: SHUTDOWN_TIMEOUT_MS });
     try { server.closeAllConnections?.(); } catch {}
     finish(1);
   }, SHUTDOWN_TIMEOUT_MS);
@@ -138,8 +217,7 @@ function shutdown(reason, exitCode = 0) {
   server.close((err) => {
     clearTimeout(timer);
     if (err) {
-      // eslint-disable-next-line no-console
-      console.error('[billtracker] server.close error:', err);
+      logger.error('billtracker.shutdown.close_error', { error: err });
       return finish(1);
     }
     finish(exitCode);
@@ -153,12 +231,10 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT',  () => shutdown('SIGINT'));
 
 process.on('uncaughtException', (err) => {
-  // eslint-disable-next-line no-console
-  console.error('[billtracker] uncaughtException:', err);
+  logger.error('billtracker.uncaughtException', { error: err });
   shutdown('uncaughtException', 1);
 });
 process.on('unhandledRejection', (reason) => {
-  // eslint-disable-next-line no-console
-  console.error('[billtracker] unhandledRejection:', reason);
+  logger.error('billtracker.unhandledRejection', { error: reason });
   shutdown('unhandledRejection', 1);
 });
