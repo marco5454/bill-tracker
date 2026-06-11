@@ -23,10 +23,13 @@
     "helmet": "^8.0.0"
   },
   "devDependencies": {
-    "concurrently": "^10.0.3",
-    "vite": "^8.0.16"
+    "concurrently": "^9.1.2",
+    "vite": "^6.4.3"
+  },
+  "overrides": {
+    "shell-quote": "^1.8.4"
   },
   "engines": {
-    "node": ">=20.19"
+    "node": ">=18.19"
   }
 }
