@@ -60,7 +60,9 @@ export function createHealthRouter({
     } else {
       const r = pingDb();
       if (r.ok) {
-        checks.db = { ok: true, durationMs: r.durationMs };
+        const entry = { ok: true, durationMs: r.durationMs };
+        if (r.slow) entry.slow = true;
+        checks.db = entry;
       } else {
         checks.db = { ok: false, reason: r.error };
         ok = false;

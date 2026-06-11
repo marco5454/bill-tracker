@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Bill & Credit Tracker
+Comment=Local bills and credit tracker
+# This is a template. Do not run it as-is — the {{REPO_PATH}} placeholders are
+# substituted by scripts/install-desktop.sh (or `npm run install:desktop`),
+# which writes the resolved file into ~/.local/share/applications/.
+Exec=bash -lc "{{REPO_PATH}}/scripts/billtracker.sh"
+Icon={{REPO_PATH}}/client/public/icons/icon-512.png
+Terminal=true
+Categories=Office;Finance;
+StartupNotify=false

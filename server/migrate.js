@@ -66,21 +66,40 @@ export function runMigrations(db, opts = {}) {
     throw new Error('[migrate] duplicate migration ids detected');
   }
   const appliedNow = [];
-  const insert = db.prepare('INSERT INTO schema_version (id, filename) VALUES (?, ?)');
+  const insert = db.prepare('INSERT OR IGNORE INTO schema_version (id, filename) VALUES (?, ?)');
   for (const m of pending) {
     const sql = readFileSync(m.path, 'utf8');
     log(`[migrate] applying ${m.filename}`);
-    const apply = db.transaction(() => {
-      db.exec(sql);
-      insert.run(m.id, m.filename);
-    });
+    // Use a deferred transaction wrapped manually with BEGIN IMMEDIATE so
+    // we acquire the write lock up-front. Without this, two server
+    // processes starting on the same DB could both observe the migration
+    // as pending, both run db.exec(sql), and the second's INSERT would
+    // succeed too (now uses INSERT OR IGNORE) — but more importantly the
+    // schema-changing exec would run twice. BEGIN IMMEDIATE serializes
+    // writers so the second process blocks until the first commits, then
+    // re-checks the applied set.
+    db.exec('BEGIN IMMEDIATE');
+    let committed = false;
     try {
-      apply();
+      // Re-check applied state under the write lock — another process may
+      // have applied this migration while we were waiting on the lock.
+      const already = db.prepare('SELECT 1 FROM schema_version WHERE id = ?').get(m.id);
+      if (!already) {
+        db.exec(sql);
+        insert.run(m.id, m.filename);
+        appliedNow.push(m.id);
+      } else {
+        log(`[migrate] ${m.filename} already applied by concurrent process, skipping`);
+      }
+      db.exec('COMMIT');
+      committed = true;
     } catch (err) {
+      if (!committed) {
+        try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+      }
       err.message = `[migrate] failed on ${m.filename}: ${err.message}`;
       throw err;
     }
-    appliedNow.push(m.id);
   }
   log(`[migrate] applied ${appliedNow.length} migration${appliedNow.length === 1 ? '' : 's'}`);
   return { applied: appliedNow };

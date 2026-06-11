@@ -1,4 +1,6 @@
 // Centralized error handler. Never leaks stack traces to clients.
+import { logger } from '../logger.js';
+
 export function errorHandler(err, req, res, _next) {
   if (res.headersSent) return;
   const status = err.status || err.statusCode || 500;
@@ -7,8 +9,17 @@ export function errorHandler(err, req, res, _next) {
   };
   if (err.details) payload.details = err.details;
   if (status >= 500) {
-    // eslint-disable-next-line no-console
-    console.error(`[${new Date().toISOString()}]`, req.method, req.path, err);
+    // Route 5xx through the structured logger (with request-scoped child if
+    // present) so server errors share log fields and reqId with their access
+    // log line. Falling back to the root logger keeps tests/non-request
+    // contexts safe.
+    const log = (req && req.log) || logger;
+    log.error('http.unhandled_error', {
+      method: req && req.method,
+      path: req && req.path,
+      status,
+      error: err,
+    });
   }
   res.status(status).json(payload);
 }

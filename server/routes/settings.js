@@ -71,7 +71,11 @@ settingsRouter.put('/', (req, res) => {
   res.json(readAll());
 });
 
-// Export full snapshot.
+// Export full snapshot. We send compact (un-indented) JSON because exports of
+// the maximum allowed size (10k bills + 200k payments) would otherwise
+// double their memory footprint for the pretty-print pass before the response
+// is flushed. Clients that want a human-readable file can pretty-print it
+// locally; the in-app Settings export already does this.
 settingsRouter.get('/export', (_req, res) => {
   const snapshot = {
     version: 1,
@@ -84,7 +88,7 @@ settingsRouter.get('/export', (_req, res) => {
   };
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', 'attachment; filename="billtracker-export.json"');
-  res.send(JSON.stringify(snapshot, null, 2));
+  res.send(JSON.stringify(snapshot));
 });
 
 // Replace all data with the imported snapshot. Validates per-item shape *before*
@@ -225,7 +229,15 @@ settingsRouter.post('/import', (req, res) => {
   res.json({ ok: true });
 });
 
-settingsRouter.post('/reset', (_req, res) => {
+settingsRouter.post('/reset', (req, res) => {
+  // Destructive: wipes every bill, credit and payment row. Require an explicit
+  // confirmation token in the body so a stray empty POST (or a CSRF
+  // "simple request" that cannot set arbitrary JSON bodies) cannot trigger
+  // a full data loss.
+  const confirm = req.body && typeof req.body === 'object' ? req.body.confirm : undefined;
+  if (confirm !== 'reset') {
+    throw new HttpError(400, 'Reset requires { "confirm": "reset" } in the request body');
+  }
   txn(() => {
     db.prepare('DELETE FROM bill_payments').run();
     db.prepare('DELETE FROM bills').run();

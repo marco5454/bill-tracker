@@ -284,3 +284,30 @@
   margin-top: 24px;
 }
 .danger-zone h3 { margin: 0 0 6px; color: var(--color-danger); font-size: 15px; }
+.danger-zone .danger-help { margin: 6px 0 12px; }
+
+/* Layout helpers used by view modules. Kept here (rather than inline
+ * style="...") so we can drop 'unsafe-inline' from the CSP style-src. */
+.card-narrow         { max-width: 560px; }
+.card-narrow-spaced  { max-width: 560px; margin-top: 16px; }
+
+.row-flex            { display: flex; gap: 8px; flex-wrap: wrap; }
+.row-flex-tight      { display: flex; gap: 8px; }
+.row-center-gap      { display: flex; align-items: center; gap: 12px; }
+
+.btn-file            { cursor: pointer; }
+
+.meta-row.meta-row-split    { justify-content: space-between; }
+.meta-row.meta-row-spaced   { margin-top: 6px; }
+.progress.progress-spaced   { margin-top: 6px; }
+
+/* Dynamic progress fill width is set via the inline custom property
+ * `--progress-width` (e.g. `--progress-width: 42%`). Setting a CSS variable
+ * via `el.style.setProperty(...)` is permitted under `style-src 'self'`
+ * because no inline `style` attribute is generated in the HTML. */
+.progress-fill { width: var(--progress-width, 0%); }
+
+/* Dashboard upcoming row tweaks */
+.section-header.section-header-tight { margin-top: 8px; }
+.section-header.section-header-tight h2 { font-size: 17px; }
+.upcoming-row .amount.amount-md { font-size: 15px; }

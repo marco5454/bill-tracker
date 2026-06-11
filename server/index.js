@@ -13,8 +13,9 @@ import { createHealthRouter } from './routes/health.js';
 import { errorHandler, notFound } from './middleware/error.js';
 import { requestId } from './middleware/request-id.js';
 import { accessLog } from './middleware/access-log.js';
+import { createCsrfGuard } from './middleware/csrf.js';
 import { logger } from './logger.js';
-import { closeDb, isDbClosed } from './db.js'; // import side-effect initializes DB + runs migrations
+import { closeDb, isDbClosed, backupOnStart } from './db.js'; // import side-effect initializes DB + runs migrations
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT     = Number(process.env.PORT || 3000);
@@ -64,9 +65,17 @@ const app = express();
 // Express strips X-Powered-By header so we don't advertise the stack.
 app.disable('x-powered-by');
 
-// Trust the loopback proxy (Vite dev server) so req.ip reflects the real client
-// when accessed via localhost. Restricted to loopback to avoid IP spoofing.
-app.set('trust proxy', 'loopback');
+// Trust proxy is OFF by default. Even 'loopback' allows X-Forwarded-For
+// spoofing from any local-user process, which would let a co-tenant on a
+// shared machine bypass per-IP rate limiters by forging that header. Operators
+// who *do* run a real reverse proxy should set BILLTRACKER_TRUST_PROXY to a
+// concrete IP (or 'loopback') and document the assumption.
+const TRUST_PROXY = process.env.BILLTRACKER_TRUST_PROXY;
+if (TRUST_PROXY && TRUST_PROXY !== '0' && TRUST_PROXY.toLowerCase() !== 'false') {
+  app.set('trust proxy', TRUST_PROXY);
+} else {
+  app.set('trust proxy', false);
+}
 
 // Per-request id + structured access log run first so all subsequent
 // middleware (including helmet/cors) can be correlated in logs.
@@ -85,7 +94,14 @@ app.use((req, res, next) => {
   return next();
 });
 
-// Security headers. CSP allows only same-origin assets (Inter is self-hosted).
+// CSRF mitigation. The API has no authentication, so a malicious page the
+// user visits in any browser on the same machine could otherwise issue
+// state-changing requests against http://127.0.0.1:3000/api/* using "simple
+// requests" (form-urlencoded POSTs without a preflight). See middleware/csrf.js
+// for the full rationale.
+app.use('/api', createCsrfGuard({ allowedHosts: HOST_ALLOWLIST }));
+
+
 // HSTS and CSP upgrade-insecure-requests are disabled because this app is designed
 // for plain-HTTP loopback use; emitting HSTS over HTTP is meaningless, and the
 // upgrade directive would silently rewrite any future http:// URL to https://.
@@ -96,7 +112,8 @@ app.use(helmet({
       'default-src':  ["'self'"],
       'script-src':   ["'self'"],
       'script-src-attr': ["'none'"],
-      'style-src':    ["'self'", "'unsafe-inline'"],
+      'style-src':    ["'self'"],
+      'style-src-attr': ["'none'"],
       'font-src':     ["'self'"],
       'img-src':      ["'self'", 'data:'],
       'connect-src':  ["'self'"],
@@ -162,6 +179,28 @@ app.use((_req, res, next) => {
   return next();
 });
 
+// --- LAN exposure split ------------------------------------------------------
+// When the operator binds to a non-loopback HOST (to serve the PWA shell to
+// phones on the LAN) we still keep the unauthenticated CRUD API loopback-only
+// by default. Phones load the static shell over LAN, the service worker
+// caches it, and the in-app probe of /api/health returns 403 -> the client
+// transparently switches to its local IndexedDB store.
+//
+// Operators who *do* want LAN clients to talk to the API (single-trusted-LAN
+// scenarios) opt in with BILLTRACKER_API_LAN=1.
+const API_LAN = process.env.BILLTRACKER_API_LAN === '1';
+function isLoopbackIp(ip) {
+  if (!ip) return false;
+  // express normalises to '::ffff:127.0.0.1' for IPv4-mapped IPv6
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+app.use('/api', (req, res, next) => {
+  if (API_LAN) return next();
+  if (isLoopbackIp(req.ip)) return next();
+  if (req.log) req.log.warn('api.lan.rejected', { ip: req.ip, path: req.path });
+  return res.status(403).json({ error: 'API restricted to loopback. Set BILLTRACKER_API_LAN=1 to expose.' });
+});
+
 // Health (liveness + readiness)
 app.use('/api/health', createHealthRouter({ isShuttingDown: () => shuttingDown }));
 
@@ -185,6 +224,12 @@ const server = app.listen(PORT, HOST, () => {
   logger.info('billtracker.api.listening', {
     host: HOST, port: PORT, env: NODE_ENV,
     network: !isLoopbackHost(HOST),
+  });
+  // Run the on-start DB snapshot after the server starts accepting
+  // connections. A slow disk (network mount, throttled volume) shouldn't
+  // delay readiness; backupOnStart already swallows IO failures internally.
+  backupOnStart().catch((err) => {
+    logger.warn('backup.onstart.failed', { error: err });
   });
 });
 

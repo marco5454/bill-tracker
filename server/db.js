@@ -33,9 +33,12 @@ const DATA_DIR    = process.env.BILLTRACKER_DATA_DIR || join(__dirname, '..', 'd
 const DB_PATH     = join(DATA_DIR, 'billtracker.db');
 const BACKUP_DIR  = join(DATA_DIR, 'backups');
 
-// Skip the backup-on-start in tests: BILLTRACKER_DATA_DIR is set by the
-// harness for an isolated tmp dir, and backups would just litter it.
-const isTest = process.env.NODE_ENV === 'test' || Boolean(process.env.BILLTRACKER_DATA_DIR);
+// Test runs bypass on-startup snapshots. Operators who legitimately override
+// BILLTRACKER_DATA_DIR should NOT also lose backups silently — they get an
+// explicit BILLTRACKER_DISABLE_BACKUPS knob. NODE_ENV=test alone is enough
+// to suppress backups in the test harness.
+const isTest = process.env.NODE_ENV === 'test';
+const backupsDisabled = isTest || process.env.BILLTRACKER_DISABLE_BACKUPS === '1';
 
 function ensureDirs() {
   if (!existsSync(DATA_DIR))   mkdirSync(DATA_DIR,   { recursive: true });
@@ -108,6 +111,12 @@ export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.pragma('synchronous = NORMAL');
+// Bound how long SQLite will wait for a lock before returning SQLITE_BUSY.
+// better-sqlite3 calls are synchronous from Node's perspective, so without
+// a busy timeout a contended write could block the event loop indefinitely.
+// 5s is plenty for our single-process desktop workload and short enough that
+// a wedged lock surfaces quickly.
+db.pragma('busy_timeout = 5000');
 
 // Apply migrations. Silent in tests; otherwise log to stdout.
 runMigrations(db, { logger: isTest ? () => {} : (m) => console.log(m) });
@@ -115,9 +124,18 @@ runMigrations(db, { logger: isTest ? () => {} : (m) => console.log(m) });
 // Seed default settings if missing
 db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run('currency', '\u20b1');
 
-// Snapshot the now-open, fully-migrated DB. Skipped in tests.
-if (!isTest) {
+/**
+ * Snapshot the live DB. Exported so the server can run it after `listen()`
+ * returns — that way a slow disk doesn't delay the readiness of the API.
+ *
+ * Resolves to `true` if a snapshot was written, `false` if backups are
+ * disabled, and rejects only on programmer error (the inner snapshot routine
+ * already swallows IO failures and logs them).
+ */
+export async function backupOnStart() {
+  if (backupsDisabled) return false;
   await snapshotBackup(db);
+  return true;
 }
 
 export function txn(fn) {
@@ -152,19 +170,37 @@ export function isDbClosed() {
 }
 
 /**
- * Trivial DB round-trip used by readiness checks. Returns:
- *   { ok: true, durationMs }      on success
- *   { ok: false, error: string }  on failure
+ * Trivial DB round-trip used by readiness checks.
+ *
+ * Returns:
+ *   { ok: true,  durationMs }                                  on success
+ *   { ok: true,  durationMs, slow: true }                      success but slow
+ *   { ok: false, error: string, durationMs? }                  on failure
+ *
+ * `better-sqlite3` is synchronous, so a true async timeout is not possible
+ * without a worker thread. We bound the *driver*-level wait via the
+ * `busy_timeout` pragma (5s) and surface unusual durations to readiness
+ * consumers via the `slow` flag. The default slow threshold is 250ms which
+ * is ~5 orders of magnitude above the normal SELECT 1 latency.
  */
+const PING_SLOW_MS = Number(process.env.BILLTRACKER_PING_SLOW_MS || 250);
+
 export function pingDb() {
   if (closed) return { ok: false, error: 'database is closed' };
   const t0 = process.hrtime.bigint();
   try {
     const r = db.prepare('SELECT 1 AS ok').get();
-    if (!r || r.ok !== 1) return { ok: false, error: 'unexpected ping result' };
-    const durationMs = Number(process.hrtime.bigint() - t0) / 1e6;
-    return { ok: true, durationMs: Math.round(durationMs * 100) / 100 };
+    const durationMs = Math.round((Number(process.hrtime.bigint() - t0) / 1e6) * 100) / 100;
+    if (!r || r.ok !== 1) return { ok: false, error: 'unexpected ping result', durationMs };
+    const out = { ok: true, durationMs };
+    if (durationMs > PING_SLOW_MS) out.slow = true;
+    return out;
   } catch (err) {
-    return { ok: false, error: err && err.message ? String(err.message) : 'ping failed' };
+    const durationMs = Math.round((Number(process.hrtime.bigint() - t0) / 1e6) * 100) / 100;
+    return {
+      ok: false,
+      error: err && err.message ? String(err.message) : 'ping failed',
+      durationMs,
+    };
   }
 }

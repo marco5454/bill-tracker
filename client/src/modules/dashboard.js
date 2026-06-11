@@ -71,8 +71,8 @@ export function renderDashboard(view) {
       </div>
     </div>
 
-    <div class="section-header" style="margin-top:8px">
-      <h2 style="font-size:17px">Upcoming &amp; Overdue Bills</h2>
+    <div class="section-header section-header-tight">
+      <h2>Upcoming &amp; Overdue Bills</h2>
     </div>
     ${upcoming.length === 0 ? `
       <div class="empty">
@@ -105,8 +105,8 @@ function renderUpcomingRow({ bill, due, days, status }, currency) {
         <div class="name">${escapeHtml(bill.name)}</div>
         <div class="when">${escapeHtml(formatDate(due))} \u00b7 ${escapeHtml(when)}</div>
       </div>
-      <div style="display:flex; align-items:center; gap:12px;">
-        <span class="amount" style="font-size:15px;">${escapeHtml(formatCurrency(bill.amount, currency))}</span>
+      <div class="row-center-gap">
+        <span class="amount amount-md">${escapeHtml(formatCurrency(bill.amount, currency))}</span>
         <span class="badge ${badgeClass}">${badgeText}</span>
       </div>
     </div>

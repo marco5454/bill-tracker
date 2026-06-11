@@ -112,7 +112,7 @@ function renderBillCard(bill, today, currency) {
         ${badge}
       </div>
 
-      <div style="display:flex; gap:8px;">
+      <div class="row-flex-tight">
         <button class="btn ${paid ? 'btn-success' : ''} btn-sm" data-action="toggle-paid" data-id="${escapeHtml(bill.id)}" type="button" aria-pressed="${paid}">
           ${paid ? '\u2713 Paid' : 'Mark as paid'}
         </button>

@@ -64,7 +64,7 @@ describe('GET /api/settings/export + POST /api/settings/import', () => {
     assert.equal(exp.body.billPayments.length, 1);
 
     // Reset (clears tables)
-    await ctx.send('POST', '/api/settings/reset');
+    await ctx.send('POST', '/api/settings/reset', { confirm: 'reset' });
     const empty = await ctx.get('/api/bills');
     assert.deepEqual(empty.body, []);
 
@@ -114,11 +114,20 @@ describe('POST /api/settings/reset', () => {
     await ctx.send('POST', '/api/bills', {
       name: 'Tmp', amount: 10, dueDay: 1, recurrence: 'Monthly', category: 'Other', notes: '',
     });
-    const { status } = await ctx.send('POST', '/api/settings/reset');
+    const { status } = await ctx.send('POST', '/api/settings/reset', { confirm: 'reset' });
     assert.equal(status, 200);
     const { body: bills } = await ctx.get('/api/bills');
     assert.deepEqual(bills, []);
     const { body: settings } = await ctx.get('/api/settings');
     assert.equal(settings.currency, '\u20ac');
+  });
+
+  it('rejects reset without confirmation token', async () => {
+    const a = await ctx.send('POST', '/api/settings/reset');
+    assert.equal(a.status, 400);
+    const b = await ctx.send('POST', '/api/settings/reset', {});
+    assert.equal(b.status, 400);
+    const c = await ctx.send('POST', '/api/settings/reset', { confirm: 'no' });
+    assert.equal(c.status, 400);
   });
 });

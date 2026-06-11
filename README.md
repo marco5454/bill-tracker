@@ -29,18 +29,22 @@ billtracker/
 │       ├── credits.js   # CRUD + monthly payment toggle (optimistic concurrency)
 │       ├── settings.js  # Currency, full export/import, reset
 │       └── health.js    # Liveness + readiness with DB ping
-├── client/              # Frontend
+├── client/              # Frontend (PWA: offline + installable)
 │   ├── index.html       # Lean shell
+│   ├── public/          # PWA manifest, icons, service worker (copied to dist/)
 │   ├── styles/          # main / components / responsive
 │   └── src/
-│       ├── main.js          # Bootstrap + tab routing
-│       ├── api.js           # Fetch wrapper (sends If-Match for writes)
+│       ├── main.js          # Bootstrap + tab routing + SW registration
+│       ├── api.js           # Storage shim (delegates to remote or local)
+│       ├── api-network.js   # Fetch wrapper (sends If-Match for writes)
+│       ├── storage/         # local-store (IndexedDB) + remote-store + selector
 │       ├── state.js         # In-memory cache + pub/sub
 │       ├── format.js        # Money/date helpers, escapeHtml, CSV (with formula-injection guard)
 │       ├── cycle.js         # Bill cycle logic (Monthly/Quarterly/Annually)
 │       ├── credit-math.js   # Simple + monthly add-on interest
 │       ├── modules/         # dashboard / bills / credits / settings
 │       └── ui/              # modal / toast / confirm
+├── scripts/             # Launchers (.sh / .bat), .desktop template + installer, icon generator
 ├── tests/               # node --test suites + harness (isolated temp DBs)
 ├── data/                # SQLite database + rotating backups (gitignored)
 ├── vite.config.js
@@ -86,6 +90,73 @@ npm start             # serves dist/ + API together on port 3000
 
 Open <http://localhost:3000>.
 
+## One-click launchers
+
+The `scripts/` directory contains thin wrappers that handle dependency install, client build, and starting the server. They are the easiest way to start the app on a fresh checkout.
+
+**Ubuntu / macOS:**
+
+```bash
+./scripts/billtracker.sh
+```
+
+The script checks Node.js is present (≥18.19), runs `npm install` if `node_modules/` is missing, runs `npm run build` if `dist/index.html` is missing or older than the client sources, then starts the server and opens the browser. Set `BILLTRACKER_OPEN_BROWSER=0` to skip auto-open.
+
+To get an Ubuntu desktop entry, run the bundled installer once:
+
+```bash
+npm run install:desktop
+```
+
+That resolves the absolute path of the repo, fills in `scripts/Billtracker.desktop.template`, writes it to `~/.local/share/applications/billtracker.desktop`, and refreshes the desktop database. After it completes, "Bill & Credit Tracker" shows up in your application menu and search. To remove it later: `npm run uninstall:desktop`.
+
+The installer is idempotent — re-run it after moving the repo to a new location.
+
+**Windows:**
+
+Double-click `scripts\billtracker.bat` (or run it from a terminal). It performs the same first-run install + build, then starts the server and opens your default browser. Right-click → *Send to* → *Desktop (create shortcut)* to put it on your desktop.
+
+## Mobile (PWA, offline-capable)
+
+The client is a Progressive Web App. Once the laptop server has been served at least once, the app installs to your phone's home screen and runs offline using an in-browser IndexedDB store.
+
+### Architecture
+
+- The PWA shell (HTML/CSS/JS, fonts, icons, service worker) is cached on the phone after the first load.
+- On boot the app probes `/api/health`. If the API answers, the app uses the laptop's SQLite database. If not (offline, different LAN, or API loopback-only), it transparently falls back to a per-device IndexedDB store.
+- Each device's local store is independent. To move data between devices, use **Settings → Export JSON** on the source device and **Import JSON** on the target.
+
+### Initial install (laptop on the same LAN)
+
+1. On the laptop, start the server bound to the LAN, but keep the unauthenticated API restricted to loopback. Copy `.env.example` to `.env` and set:
+
+   ```
+   HOST=0.0.0.0
+   BILLTRACKER_ALLOW_NETWORK=1
+   BILLTRACKER_HOST_ALLOWLIST=<laptop-lan-ip>:3000
+   # Do NOT set BILLTRACKER_API_LAN unless you understand the trade-off.
+   ```
+
+   Find your LAN IP with `hostname -I | awk '{print $1}'` (Linux) or check the network panel.
+
+2. Run the launcher (`./scripts/billtracker.sh`) or `npm start`.
+
+3. On the phone, open `http://<laptop-lan-ip>:3000/` in Chrome (Android) or Safari (iOS). The phone loads the static shell + caches it via the service worker. Because the API is loopback-only, the in-app health probe returns 403 and the client switches to local IndexedDB mode (a small **Local** badge appears in the header).
+
+4. Use **Add to Home Screen** in the browser menu to install. From then on the icon launches the app full-screen, even with the laptop powered off.
+
+5. To carry your data over: on the laptop, *Settings → Export JSON*; transfer the file to the phone (e.g. via cloud or messaging); on the phone, *Settings → Import JSON*.
+
+### Why is the API loopback-only by default on LAN?
+
+The API has no authentication. Anyone on your LAN could otherwise wipe or read your data via a single HTTP request. The PWA design avoids that risk by giving every device its own offline store. If you have a single trusted LAN and explicitly want every device to share the laptop's database, set `BILLTRACKER_API_LAN=1` and accept that anyone on that LAN has full read/write access.
+
+### iOS caveats
+
+- iOS 16+ supports installable PWAs and IndexedDB persistence works in standalone mode.
+- iOS Safari may evict PWA storage if the app is unused for several weeks. Export your data periodically.
+- Older iOS versions or private-browsing tabs may have IndexedDB disabled; the app shows a warning if persistence is unavailable.
+
 ## Production deployment (supervisor)
 
 `npm start` starts the process in the foreground and **does not auto-restart on crash**. The server intentionally exits with code `1` on uncaught exceptions / unhandled rejections, expecting a supervisor to bring it back up. For a long-running install, wrap it with `systemd` (or `pm2`, `runit`, `launchd`, etc.).
@@ -111,6 +182,8 @@ Environment=HOST=127.0.0.1
 # Environment=HOST=0.0.0.0
 # Environment=BILLTRACKER_ALLOW_NETWORK=1
 # Environment=BILLTRACKER_HOST_ALLOWLIST=billtracker.lan
+# Optionally allow LAN clients to talk to /api/* (default keeps it loopback-only):
+# Environment=BILLTRACKER_API_LAN=1
 StandardOutput=journal
 StandardError=journal
 
@@ -146,6 +219,7 @@ The structured logger emits one JSON object per line on stdout, which `journald`
 This app has **no authentication**. The default deployment binds to `127.0.0.1` so only the local user can reach it. The following measures are in place:
 
 - **Loopback by default.** The server *refuses to start* on a non-loopback `HOST` unless you also set `BILLTRACKER_ALLOW_NETWORK=1`, which acknowledges that you are exposing an unauthenticated CRUD API to your network.
+- **LAN split.** Even when the server binds to `0.0.0.0`, the unauthenticated `/api/*` routes stay loopback-only by default — phones on the LAN can still load the PWA shell, but the in-app health probe returns 403 and the client falls back to its IndexedDB store. Set `BILLTRACKER_API_LAN=1` only on a trusted LAN where you want every device to share the laptop's database.
 - **Host-header allow-list** mitigates DNS-rebinding attacks against `127.0.0.1`. Configure additional names via `BILLTRACKER_HOST_ALLOWLIST=`.
 - **Helmet** sets strict security headers including a CSP that disallows inline scripts.
 - **Rate limiting**: 300 writes/min/IP globally, plus a stricter 10/5min/IP cap on the destructive `/api/settings/{import,reset,export}` endpoints.
@@ -189,6 +263,7 @@ See [`.env.example`](./.env.example) for the full list with comments.
 - `HOST` — bind address (default `127.0.0.1`)
 - `BILLTRACKER_ALLOW_NETWORK` — must be `1` if `HOST` is non-loopback (no auth!)
 - `BILLTRACKER_HOST_ALLOWLIST` — comma-separated extra Host header values to accept
+- `BILLTRACKER_API_LAN` — set to `1` to allow non-loopback clients to call `/api/*` (use on trusted LAN only)
 - `BILLTRACKER_LOG_LEVEL` — `debug` / `info` / `warn` / `error` / `silent`
 - `BILLTRACKER_DATA_DIR` — override SQLite data directory (used by tests)
 - `SHUTDOWN_TIMEOUT_MS` — graceful-shutdown timeout (default `10000`)

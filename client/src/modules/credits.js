@@ -61,6 +61,16 @@ export function renderCredits(view) {
   view.querySelectorAll('[data-action]').forEach(btn => {
     btn.addEventListener('click', onCardAction);
   });
+
+  // Set dynamic progress widths via CSS custom property. Done in JS rather
+  // than via an inline `style="width:N%"` attribute so the page CSP can
+  // disallow `'unsafe-inline'` in style-src. Setting an element's style
+  // property from a script is allowed under `style-src 'self'`.
+  view.querySelectorAll('.progress-fill[data-progress]').forEach((el) => {
+    const pct = Number(el.dataset.progress);
+    const clamped = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 0;
+    el.style.setProperty('--progress-width', `${clamped}%`);
+  });
 }
 
 function renderCreditCard(credit, today, currency) {
@@ -99,14 +109,14 @@ function renderCreditCard(credit, today, currency) {
       </div>
 
       <div>
-        <div class="meta-row" style="justify-content:space-between;">
+        <div class="meta-row meta-row-split">
           <div><strong>${prog.paidCount}/${prog.totalMonths} paid</strong> (${prog.progress.toFixed(0)}%)</div>
           <div class="muted tiny">${prog.monthsRemaining} mo left \u00b7 ${prog.timeProgress.toFixed(0)}% time</div>
         </div>
-        <div class="progress" style="margin-top:6px;">
-          <div class="progress-fill ${isComplete ? 'complete' : ''}" style="width:${prog.progress}%"></div>
+        <div class="progress progress-spaced">
+          <div class="progress-fill ${isComplete ? 'complete' : ''}" data-progress="${prog.progress}"></div>
         </div>
-        <div class="meta-row" style="margin-top:6px;">
+        <div class="meta-row meta-row-spaced">
           <div><strong>Paid</strong> ${escapeHtml(formatCurrency(prog.totalPaid, currency))}</div>
           <div><strong>Remaining</strong> ${escapeHtml(formatCurrency(remaining, currency))}</div>
         </div>

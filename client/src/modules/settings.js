@@ -11,7 +11,7 @@ export function renderSettings(view) {
       <h2>Settings</h2>
     </div>
 
-    <div class="card" style="max-width:560px;">
+    <div class="card card-narrow">
       <h3 class="card-title">Currency</h3>
       <div class="card-sub">Symbol prefixed to amounts (e.g. \u20b1, $, \u20ac, \u00a3, \u00a5).</div>
       <div class="field">
@@ -23,21 +23,21 @@ export function renderSettings(view) {
       </div>
     </div>
 
-    <div class="card" style="max-width:560px; margin-top:16px;">
+    <div class="card card-narrow-spaced">
       <h3 class="card-title">Backup &amp; Restore</h3>
       <div class="card-sub">Export all bills, credits, payments &amp; settings as a JSON file. Importing replaces all current data.</div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <div class="row-flex">
         <button class="btn" id="set-export" type="button">Export JSON</button>
-        <label class="btn" style="cursor:pointer;">
+        <label class="btn btn-file">
           Import JSON
           <input id="set-import" type="file" accept="application/json,.json" hidden />
         </label>
       </div>
     </div>
 
-    <div class="danger-zone" style="max-width:560px;">
+    <div class="danger-zone card-narrow">
       <h3>Danger zone</h3>
-      <p class="muted tiny" style="margin:6px 0 12px;">Permanently deletes every bill, credit, and payment record. The action cannot be undone.</p>
+      <p class="muted tiny danger-help">Permanently deletes every bill, credit, and payment record. The action cannot be undone.</p>
       <button class="btn btn-danger" id="set-reset" type="button">Reset all data</button>
     </div>
   `;

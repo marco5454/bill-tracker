@@ -12,7 +12,9 @@
     "preview": "vite preview",
     "start": "NODE_ENV=production node server/index.js",
     "test": "NODE_ENV=test node --test tests/",
-    "audit": "npm audit --omit=dev"
+    "audit": "npm audit --omit=dev",
+    "install:desktop": "bash scripts/install-desktop.sh",
+    "uninstall:desktop": "bash scripts/install-desktop.sh --remove"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
