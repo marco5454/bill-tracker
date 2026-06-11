@@ -105,12 +105,14 @@ app.use(helmet({
 }));
 
 app.use(compression());
-app.use(express.json({ limit: '5mb' }));
 
 // Shutdown flag - declared early so middleware below can reference it.
 let shuttingDown = false;
 
-// Reasonable rate limit on writes only.
+// --- Rate limiters (BEFORE body parsing) -------------------------------------
+// Limiters must run before express.json so an attacker cannot force the parser
+// to allocate memory for oversized bodies before the limit applies. Limiters
+// only inspect headers/IP so they work fine pre-parse.
 const writeLimiter = rateLimit({
   windowMs: 60_000,
   max: 300,
@@ -136,6 +138,14 @@ const sensitiveSettingsLimiter = rateLimit({
 app.use('/api/settings/export', sensitiveSettingsLimiter);
 app.use('/api/settings/import', sensitiveSettingsLimiter);
 app.use('/api/settings/reset',  sensitiveSettingsLimiter);
+
+// --- Body parsing (AFTER limiters) -------------------------------------------
+// Most endpoints have tiny bodies (a single bill/credit row tops out around
+// ~1.3 KB). Only /api/settings/import legitimately needs a multi-MB payload.
+// Cap the global parser tightly and mount the larger parser only on the
+// import route, which is already gated by sensitiveSettingsLimiter above.
+app.use('/api/settings/import', express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '200kb' }));
 
 // Reject new requests once shutdown begins.
 app.use((_req, res, next) => {
