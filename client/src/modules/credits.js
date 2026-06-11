@@ -130,20 +130,22 @@ function renderPaymentLog(credit, prog, monthlyAmount, currency) {
   const cells = months.map(ym => {
     const p = prog.paymentMap.get(ym);
     const paid = !!p;
+    const customAmount = paid && p.amount != null && p.amount !== monthlyAmount;
     const amt = paid ? (p.amount != null ? p.amount : monthlyAmount) : monthlyAmount;
     return `
-      <button type="button" class="log-cell ${paid ? 'paid' : ''}"
-              data-action="toggle-payment" data-id="${escapeHtml(credit.id)}" data-ym="${escapeHtml(ym)}"
+      <button type="button" class="log-cell ${paid ? 'paid' : ''}${customAmount ? ' custom-amount' : ''}"
+              data-action="open-payment" data-id="${escapeHtml(credit.id)}" data-ym="${escapeHtml(ym)}"
               aria-pressed="${paid}"
-              title="${paid ? 'Click to mark unpaid' : 'Click to mark paid'} \u00b7 ${ymLabel(ym)}">
+              title="${paid ? 'Click to edit or unmark' : 'Click to mark paid'} \u00b7 ${ymLabel(ym)}">
         <span class="ym">${escapeHtml(ymLabel(ym))}</span>
         <span class="amt">${escapeHtml(formatCurrency(amt, currency))}</span>
+        ${customAmount ? '<span class="custom-marker" aria-label="Custom amount" title="Custom amount">*</span>' : ''}
       </button>
     `;
   }).join('');
   return `
     <div class="payment-log">
-      <div class="muted tiny">Click a month to toggle paid/unpaid. Right-click (or long-press) to set a custom amount.</div>
+      <div class="muted tiny">Click a month to record or edit a payment. Months marked with <strong>*</strong> were paid with a custom amount.</div>
       <div class="log-grid">${cells}</div>
     </div>
   `;
@@ -176,10 +178,9 @@ async function onCardAction(e) {
       else expandedLogs.add(id);
       const view = document.getElementById('view');
       renderCredits(view);
-    } else if (action === 'toggle-payment') {
+    } else if (action === 'open-payment') {
       const ym = btn.dataset.ym;
-      await api.toggleCreditPayment(id, ym, null, credit.version);
-      await refreshCredits();
+      openPaymentModal(credit, ym);
     }
   } catch (err) {
     if (err instanceof ApiError && (err.status === 412 || err.status === 428)) {
@@ -317,6 +318,135 @@ function collectCreditForm(form) {
     endDate:      String(fd.get('endDate')),
     notes:        String(fd.get('notes') || '').trim()
   };
+}
+
+// Modal for recording / editing / clearing a single month's payment.
+//
+// Unpaid month: amount input pre-filled with the scheduled monthly amount.
+//   Submit -> toggleCreditPayment(amount). Sending the scheduled amount as a
+//   custom-amount keeps semantics simple, but if the user does not edit it we
+//   pass null so the server stores "use scheduled" (so future schedule changes
+//   don't strand the payment at a stale fixed amount).
+//
+// Paid month: amount input pre-filled with the recorded amount (or scheduled
+//   if it was recorded as null). Submit -> updateCreditPaymentAmount. There is
+//   also a "Mark unpaid" action that calls toggleCreditPayment to remove it.
+function openPaymentModal(credit, ym) {
+  const totals = computeTotals(credit);
+  const prog = computeProgress(credit, todayLocal());
+  const { settings } = getState();
+  const currency = settings.currency || '\u20b1';
+  const scheduled = totals.monthly;
+  const existing = prog.paymentMap.get(ym);
+  const isPaid = !!existing;
+  const recordedAmount = isPaid ? (existing.amount != null ? existing.amount : scheduled) : null;
+  const initialAmount = isPaid ? recordedAmount : scheduled;
+
+  const form = document.createElement('form');
+  form.id = 'payment-form';
+  form.noValidate = true;
+  form.innerHTML = `
+    <div class="form-grid">
+      <div class="field full">
+        <div class="muted tiny">${escapeHtml(credit.name)} \u00b7 ${escapeHtml(ymLabel(ym))}</div>
+      </div>
+      <div class="field">
+        <label for="pf-amount">Amount paid</label>
+        <input id="pf-amount" name="amount" type="number" step="0.01" min="0" required
+               value="${escapeHtml(initialAmount.toFixed(2))}" />
+        <div class="field-hint">Scheduled: ${escapeHtml(formatCurrency(scheduled, currency))}</div>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button type="button" class="btn btn-sm" id="pf-use-scheduled">Use scheduled</button>
+      </div>
+    </div>
+  `;
+
+  form.querySelector('#pf-use-scheduled').addEventListener('click', () => {
+    form.querySelector('#pf-amount').value = scheduled.toFixed(2);
+    form.querySelector('#pf-amount').focus();
+  });
+
+  const footer = document.createDocumentFragment();
+  const cancel = document.createElement('button');
+  cancel.type = 'button'; cancel.className = 'btn'; cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => closeModal());
+  footer.appendChild(cancel);
+
+  if (isPaid) {
+    const unmark = document.createElement('button');
+    unmark.type = 'button';
+    unmark.className = 'btn btn-danger';
+    unmark.textContent = 'Mark unpaid';
+    unmark.addEventListener('click', async () => {
+      try {
+        // toggleCreditPayment removes the row when one already exists.
+        await api.toggleCreditPayment(credit.id, ym, null, credit.version);
+        await refreshCredits();
+        closeModal();
+        toastSuccess('Payment removed');
+      } catch (err) {
+        if (err instanceof ApiError && (err.status === 412 || err.status === 428)) {
+          try { await refreshCredits(); } catch {}
+        }
+        toastError(err instanceof ApiError ? err.message : 'Action failed');
+      }
+    });
+    footer.appendChild(unmark);
+  }
+
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'btn btn-primary';
+  save.textContent = isPaid ? 'Save amount' : 'Mark paid';
+  save.setAttribute('form', 'payment-form');
+  footer.appendChild(save);
+
+  openModal({
+    title: isPaid ? 'Edit payment' : 'Record payment',
+    body: form,
+    footer
+  });
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const raw = String(form.querySelector('#pf-amount').value).trim();
+    const amount = Number(raw);
+    if (raw === '' || !Number.isFinite(amount) || amount < 0) {
+      toastError('Enter a valid amount');
+      return;
+    }
+    // If the user kept the scheduled amount on a brand-new payment, send null
+    // so future term/rate changes flow through. Otherwise persist the exact
+    // value the user entered. We compare with a small epsilon to tolerate
+    // floating-point noise from toFixed/parse round-trips.
+    const isExactlyScheduled = Math.abs(amount - scheduled) < 0.005;
+    try {
+      if (isPaid) {
+        await api.updateCreditPaymentAmount(
+          credit.id, ym,
+          isExactlyScheduled ? null : amount,
+          credit.version
+        );
+        toastSuccess('Payment updated');
+      } else {
+        await api.toggleCreditPayment(
+          credit.id, ym,
+          isExactlyScheduled ? null : amount,
+          credit.version
+        );
+        toastSuccess('Payment recorded');
+      }
+      await refreshCredits();
+      closeModal();
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 412 || err.status === 428)) {
+        try { await refreshCredits(); } catch {}
+      }
+      toastError(err instanceof ApiError ? err.message : 'Save failed');
+    }
+  });
 }
 
 function exportCreditsCsv() {
