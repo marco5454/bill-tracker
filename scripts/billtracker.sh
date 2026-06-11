@@ -7,10 +7,12 @@
 #   3. If dist/ is missing or older than the newest source file, run `npm run build`.
 #   4. Start `npm start` and open http://localhost:<PORT> in the default browser.
 #
-# Configure via environment variables (or by editing this file):
+# Configure via environment variables, .env, or by editing this file:
 #   PORT                       API + UI port (default 3000)
-#   HOST                       Bind address (default 127.0.0.1)
+#   HOST                       Bind address (default from .env, else 127.0.0.1)
 #   BILLTRACKER_OPEN_BROWSER   "0" disables the auto-open
+#
+# This launcher does not override HOST/PORT/etc. when set in your .env file.
 #
 # Usage:
 #   bash scripts/billtracker.sh
@@ -25,6 +27,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_DIR"
+
+# Read .env (if present) so we can show the right URL when opening the browser.
+# The server itself loads .env via dotenv; we only source it here for display.
+if [ -f ".env" ]; then
+  # shellcheck disable=SC1091
+  set -a; . ./.env; set +a
+fi
 
 PORT="${PORT:-3000}"
 HOST="${HOST:-127.0.0.1}"
@@ -95,8 +104,4 @@ fi
 # --- Run the server ----------------------------------------------------------
 
 echo "[billtracker] Starting on http://${HOST}:${PORT}  (Ctrl+C to stop)"
-exec env NODE_ENV=production PORT="$PORT" HOST="$HOST" \
-  ${BILLTRACKER_ALLOW_NETWORK:+BILLTRACKER_ALLOW_NETWORK="$BILLTRACKER_ALLOW_NETWORK"} \
-  ${BILLTRACKER_HOST_ALLOWLIST:+BILLTRACKER_HOST_ALLOWLIST="$BILLTRACKER_HOST_ALLOWLIST"} \
-  ${BILLTRACKER_API_LAN:+BILLTRACKER_API_LAN="$BILLTRACKER_API_LAN"} \
-  npm start
+exec npm start

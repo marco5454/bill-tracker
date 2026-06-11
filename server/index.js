@@ -1,3 +1,4 @@
+import 'dotenv/config'; // Load .env (if present) before reading process.env below.
 import express from 'express';
 import helmet from 'helmet';
 import compression from 'compression';

@@ -128,16 +128,16 @@ The client is a Progressive Web App. Once the laptop server has been served at l
 
 ### Initial install (laptop on the same LAN)
 
-1. On the laptop, start the server bound to the LAN, but keep the unauthenticated API restricted to loopback. Copy `.env.example` to `.env` and set:
+1. On the laptop, start the server bound to the LAN, but keep the unauthenticated API restricted to loopback. Copy `.env.example` to `.env` and set (no leading whitespace, no angle brackets — replace `<laptop-lan-ip>` with your actual address):
 
    ```
    HOST=0.0.0.0
    BILLTRACKER_ALLOW_NETWORK=1
-   BILLTRACKER_HOST_ALLOWLIST=<laptop-lan-ip>:3000
+   BILLTRACKER_HOST_ALLOWLIST=192.168.1.42:3000,192.168.1.42
    # Do NOT set BILLTRACKER_API_LAN unless you understand the trade-off.
    ```
 
-   Find your LAN IP with `hostname -I | awk '{print $1}'` (Linux) or check the network panel.
+   The server reads `.env` automatically on startup (via `dotenv`). Find your LAN IP with `hostname -I | awk '{print $1}'` (Linux) or check the network panel.
 
 2. Run the launcher (`./scripts/billtracker.sh`) or `npm start`.
 
