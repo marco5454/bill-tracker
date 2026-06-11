@@ -86,6 +86,55 @@ npm start             # serves dist/ + API together on port 3000
 
 Open <http://localhost:3000>.
 
+## Production deployment (supervisor)
+
+`npm start` starts the process in the foreground and **does not auto-restart on crash**. The server intentionally exits with code `1` on uncaught exceptions / unhandled rejections, expecting a supervisor to bring it back up. For a long-running install, wrap it with `systemd` (or `pm2`, `runit`, `launchd`, etc.).
+
+Minimal systemd unit (`/etc/systemd/system/billtracker.service`):
+
+```ini
+[Unit]
+Description=Bill & Credit Tracker
+After=network.target
+
+[Service]
+Type=simple
+User=billtracker
+WorkingDirectory=/opt/billtracker
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+# Uncomment to expose on the LAN (no auth — read the security model first):
+# Environment=HOST=0.0.0.0
+# Environment=BILLTRACKER_ALLOW_NETWORK=1
+# Environment=BILLTRACKER_HOST_ALLOWLIST=billtracker.lan
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/billtracker/data
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now billtracker
+journalctl -u billtracker -f       # follow structured JSON logs
+```
+
+The structured logger emits one JSON object per line on stdout, which `journald` ingests cleanly. Use `journalctl -u billtracker -o cat | jq` for ad-hoc queries.
+
 ## Data & backups
 
 - Database file: `data/billtracker.db`
