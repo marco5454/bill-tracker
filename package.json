@@ -15,6 +15,7 @@
     "audit": "npm audit --omit=dev"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.2.8",
     "better-sqlite3": "^11.3.0",
     "compression": "^1.7.4",
     "express": "^4.21.0",

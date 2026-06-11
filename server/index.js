@@ -85,7 +85,7 @@ app.use((req, res, next) => {
   return next();
 });
 
-// Security headers. CSP allows only same-origin assets + Google Fonts (used by Inter).
+// Security headers. CSP allows only same-origin assets (Inter is self-hosted).
 // HSTS and CSP upgrade-insecure-requests are disabled because this app is designed
 // for plain-HTTP loopback use; emitting HSTS over HTTP is meaningless, and the
 // upgrade directive would silently rewrite any future http:// URL to https://.
@@ -96,8 +96,8 @@ app.use(helmet({
       'default-src':  ["'self'"],
       'script-src':   ["'self'"],
       'script-src-attr': ["'none'"],
-      'style-src':    ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-      'font-src':     ["'self'", 'https://fonts.gstatic.com'],
+      'style-src':    ["'self'", "'unsafe-inline'"],
+      'font-src':     ["'self'"],
       'img-src':      ["'self'", 'data:'],
       'connect-src':  ["'self'"],
       'object-src':   ["'none'"],

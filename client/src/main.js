@@ -1,3 +1,10 @@
+// Self-hosted Inter (latin subset). Vite bundles these into dist/assets so the
+// app makes no third-party requests at runtime.
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-600.css';
+import '@fontsource/inter/latin-700.css';
+
 import { loadAll, subscribe } from './state.js';
 import { renderDashboard } from './modules/dashboard.js';
 import { renderBills }     from './modules/bills.js';
