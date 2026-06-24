@@ -310,4 +310,76 @@
 /* Dashboard upcoming row tweaks */
 .section-header.section-header-tight { margin-top: 8px; }
 .section-header.section-header-tight h2 { font-size: 17px; }
+.section-header.section-header-tight h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.section-header.section-header-spaced { margin-top: 28px; }
 .upcoming-row .amount.amount-md { font-size: 15px; }
+
+/* Dashboard summary headline */
+.dash-summary {
+  margin-bottom: 20px;
+}
+.dash-summary .stat {
+  background: linear-gradient(135deg, var(--color-surface), var(--color-surface-2));
+}
+.dash-summary .stat-value { font-size: 28px; }
+
+.stat-value-sub {
+  font-size: 14px;
+  color: var(--color-text-dim);
+  font-weight: 400;
+}
+
+/* Mini stat row (paid this month, unpaid this month, total paid) */
+.dash-row-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+.dash-mini-stat {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.dash-mini-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-dim);
+  margin-bottom: 6px;
+}
+.dash-mini-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Loan progress rows on dashboard */
+.loan-progress-list {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+.loan-progress-row {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+.loan-progress-row:last-child { border-bottom: 0; }
+.loan-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.loan-progress-row .name { font-weight: 500; }
+.loan-progress-row .when { font-size: 13px; color: var(--color-text-dim); }
+.loan-progress-amounts { text-align: right; }
