@@ -99,7 +99,13 @@ export function renderDashboard(view) {
     }
   }
   upcomingInstallments.sort((a, b) => a.ym.localeCompare(b.ym));
-  loanRows.sort((a, b) => b.remaining - a.remaining);
+  // Sort by closeness to completion: highest progress % first.
+  // Tiebreaker: fewer months remaining first, then smaller remaining balance.
+  loanRows.sort((a, b) => {
+    if (b.prog.progress !== a.prog.progress) return b.prog.progress - a.prog.progress;
+    if (a.prog.monthsRemaining !== b.prog.monthsRemaining) return a.prog.monthsRemaining - b.prog.monthsRemaining;
+    return a.remaining - b.remaining;
+  });
 
   view.innerHTML = `
     <div class="section-header">
